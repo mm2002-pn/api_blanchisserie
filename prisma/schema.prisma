@@ -1,0 +1,661 @@
+// ──────────────────────────────────────────────────────────────────────
+//  BLANCHISSERIE SN — Prisma schema
+//  Modèle de données end-to-end (mobile + web admin + AI)
+// ──────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ════════════ AUTH & USERS ════════════
+
+enum Role {
+  admin
+  manager
+  supervisor
+  operator
+  driver
+  hotel
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  phone         String?
+  passwordHash  String
+  firstName     String
+  lastName      String
+  role          Role
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  clientId          String?         // si role = hotel
+  client            Client?         @relation(fields: [clientId], references: [id])
+  refreshTokens     RefreshToken[]
+  auditLogs         AuditLog[]
+  collectionsAsDrv  Order[]         @relation("DriverCollect")
+  deliveriesAsDrv   Order[]         @relation("DriverDeliver")
+
+  @@index([role, isActive])
+  @@index([clientId])
+}
+
+model RefreshToken {
+  id          String   @id @default(cuid())
+  tokenHash   String   @unique
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ════════════ CLIENTS ════════════
+
+enum ClientType {
+  hotel_5_etoiles
+  hotel_4_etoiles
+  hotel_3_etoiles
+  restaurant
+  autre
+}
+
+model Client {
+  id              String     @id @default(cuid())
+  name            String
+  type            ClientType
+  address         String
+  city            String     @default("Dakar")
+  contactPerson   String?
+  phone           String?
+  email           String?
+  ninea           String?    // identifiant fiscal Sénégal
+  geoLat          Float?
+  geoLng          Float?
+  tariffId        String?
+  tariff          Tariff?    @relation(fields: [tariffId], references: [id])
+  isActive        Boolean    @default(true)
+  notes           String?    @db.Text
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  users           User[]
+  orders          Order[]
+  invoices        Invoice[]
+
+  @@index([type, isActive])
+}
+
+// ════════════ CATALOGUE LINGE ════════════
+
+enum LinenCategory {
+  LP    // Linge Plat
+  LF    // Linge Forme
+  NAE   // Nettoyage à sec
+}
+
+enum BillingMode {
+  weight    // au kilo
+  piece     // à la pièce
+}
+
+model LinenType {
+  id              String        @id @default(cuid())
+  code            String        @unique
+  name            String
+  category        LinenCategory
+  averageWeight   Int           // grammes
+  billingMode     BillingMode
+  unitPrice       Decimal       @db.Decimal(10, 2)
+  treatmentMinutes Int?
+  notes           String?
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  triageItems     TriageItem[]
+  tags            ItemTag[]
+  invoiceLines    InvoiceLine[]
+
+  @@index([category])
+}
+
+// ════════════ MACHINES & PROGRAMMES ════════════
+
+enum MachineKind {
+  laveuse
+  secheuse
+  calandre
+  presse
+  secheuse_repasseuse
+}
+
+enum MachineStatus {
+  active
+  maintenance
+  hors_service
+}
+
+model Machine {
+  id              String        @id @default(cuid())
+  reference       String        @unique
+  brand           String
+  model           String
+  kind            MachineKind
+  capacityKg      Int
+  location        String
+  status          MachineStatus @default(active)
+  lastMaintenanceAt DateTime?
+  nextMaintenanceAt DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  batches         Batch[]
+
+  @@index([kind, status])
+}
+
+model WashingProgram {
+  id              String        @id @default(cuid())
+  code            String        @unique
+  name            String
+  temperature     Int           // °C
+  durationMin     Int
+  spinSpeed       Int           // rpm
+  waterLiters     Int
+  detergentType   String
+  suitable        LinenCategory[]
+  description     String?
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  batches         Batch[]
+
+  @@index([isActive])
+}
+
+// ════════════ COMMANDES & WORKFLOW ════════════
+
+enum OrderStatus {
+  pending           // créée par hotel, pas encore confirmée
+  confirmed         // confirmée par admin
+  collection_planned
+  collected         // ramassé par chauffeur
+  received          // réceptionné + pesé en atelier
+  triaged           // ventilation par type effectuée
+  in_production     // batches en cours
+  ready             // prêt pour livraison
+  delivered         // livré
+  invoiced          // facturé
+  cancelled
+}
+
+enum WorkflowState {
+  COLLECTE_SCHEDULED
+  COLLECTE_IN_PROGRESS
+  COLLECTE_COMPLETED
+  RECEPTION_PENDING
+  WEIGHING_IN_PROGRESS
+  WEIGHING_COMPLETED
+  TRIAGE_PENDING
+  TRIAGE_IN_PROGRESS
+  TRIAGE_COMPLETED
+  LAVAGE_PENDING
+  LAVAGE_IN_PROGRESS
+  LAVAGE_COMPLETED
+  SECHAGE_PENDING
+  SECHAGE_IN_PROGRESS
+  SECHAGE_COMPLETED
+  CALANDRAGE_PENDING
+  CALANDRAGE_IN_PROGRESS
+  CALANDRAGE_COMPLETED
+  REPASSAGE_PENDING
+  REPASSAGE_IN_PROGRESS
+  REPASSAGE_COMPLETED
+  FINITION_PENDING
+  FINITION_IN_PROGRESS
+  FINITION_COMPLETED
+  LIVRAISON_SCHEDULED
+  LIVRAISON_IN_PROGRESS
+  LIVRAISON_COMPLETED
+  CANCELLED
+}
+
+model Order {
+  id                String        @id @default(cuid())
+  orderNumber       String        @unique
+  clientId          String
+  client            Client        @relation(fields: [clientId], references: [id])
+
+  status            OrderStatus   @default(pending)
+  workflowState     WorkflowState @default(COLLECTE_SCHEDULED)
+
+  // Estimation par le client
+  estimatedItems    Json          // [{ category, type, quantity }]
+  estimatedWeight   Int?          // grammes
+  estimatedPriceFcfa Decimal?     @db.Decimal(12, 2)
+
+  // Pesée chauffeur (terrain)
+  driverWeight      Int?          // grammes
+  driverPieces      Int?
+  visualEstimation  String?       // S/M/L/XL
+  collectionPhotos  String[]      // URLs
+
+  // Pesée atelier (officielle = base facturation)
+  receivedWeight    Int?          // grammes
+  receivedPieces    Int?
+  weightDeviation   Float?        // % calculé
+
+  // Dates clés
+  collectionDate    DateTime
+  collectionPlannedAt DateTime?
+  collectedAt       DateTime?
+  receivedAt        DateTime?
+  triagedAt         DateTime?
+  readyAt           DateTime?
+  deliveredAt       DateTime?
+
+  // Affectations chauffeurs
+  collectionDriverId String?
+  collectionDriver   User?        @relation("DriverCollect", fields: [collectionDriverId], references: [id])
+  collectionVehicleId String?
+  collectionVehicle  Vehicle?     @relation("CollectVehicle", fields: [collectionVehicleId], references: [id])
+  collectionGeoLat   Float?
+  collectionGeoLng   Float?
+  collectionSignatureUrl String?
+  collectionRecipientName String?
+
+  deliveryDriverId  String?
+  deliveryDriver    User?         @relation("DriverDeliver", fields: [deliveryDriverId], references: [id])
+  deliveryVehicleId String?
+  deliveryVehicle   Vehicle?      @relation("DeliverVehicle", fields: [deliveryVehicleId], references: [id])
+  deliveryPhotos    String[]
+  deliverySignatureUrl String?
+  deliveryRecipientName String?
+
+  instructions      String?       @db.Text
+  cancelReason      String?
+
+  // Versionnement optimistic locking
+  version           Int           @default(0)
+
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  triage            TriageRecord?
+  itemTags          ItemTag[]
+  invoiceLines      InvoiceLine[]
+
+  @@index([clientId, status])
+  @@index([workflowState])
+  @@index([collectionDate])
+}
+
+// ════════════ VEHICULES ════════════
+
+enum VehicleStatus {
+  available
+  in_route
+  maintenance
+  out_of_service
+}
+
+model Vehicle {
+  id              String        @id @default(cuid())
+  matricule       String        @unique
+  brand           String
+  model           String
+  capacityKg      Int
+  fuelLevel       Int           @default(100)
+  status          VehicleStatus @default(available)
+  lastMaintenanceAt DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  collectOrders   Order[]       @relation("CollectVehicle")
+  deliverOrders   Order[]       @relation("DeliverVehicle")
+
+  @@index([status])
+}
+
+// ════════════ TRIAGE & ÉTIQUETAGE ════════════
+
+model TriageRecord {
+  id              String    @id @default(cuid())
+  orderId         String    @unique
+  order           Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  totalPieces     Int
+  totalWeight     Int       // grammes
+  deviationPct    Float     // vs receivedWeight
+  performedBy     String    // userId
+  performedAt     DateTime  @default(now())
+  labelsPrinted   Boolean   @default(false)
+  labelsPrintedAt DateTime?
+
+  items           TriageItem[]
+
+  @@index([performedBy])
+}
+
+model TriageItem {
+  id              String    @id @default(cuid())
+  triageId        String
+  triage          TriageRecord @relation(fields: [triageId], references: [id], onDelete: Cascade)
+  linenTypeId     String
+  linenType       LinenType    @relation(fields: [linenTypeId], references: [id])
+  pieces          Int
+  weight          Int          // grammes
+
+  @@index([triageId])
+}
+
+// Tag = 1 article individuel = traçabilité unitaire dans le batching multi-clients
+enum ItemTagState {
+  triaged
+  in_lavage
+  in_sechage
+  in_calandrage
+  in_repassage
+  in_finition
+  done
+  lost
+}
+
+model ItemTag {
+  id              String        @id @default(cuid())
+  tag             String        @unique  // ex. CMD-141-001
+  orderId         String
+  order           Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  linenTypeId     String
+  linenType       LinenType     @relation(fields: [linenTypeId], references: [id])
+  weight          Int           // grammes (estimé via averageWeight)
+  state           ItemTagState  @default(triaged)
+  currentBatchId  String?
+  currentBatch    Batch?        @relation(fields: [currentBatchId], references: [id])
+  scannedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  scans           TagScan[]
+
+  @@index([orderId])
+  @@index([state])
+  @@index([currentBatchId])
+}
+
+model TagScan {
+  id              String    @id @default(cuid())
+  tagId           String
+  tag             ItemTag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  station         String    // ex. "lavage-A", "calandre-1"
+  scannedBy       String    // userId
+  scannedAt       DateTime  @default(now())
+  metadata        Json?
+
+  @@index([tagId])
+}
+
+// ════════════ BATCHES (cycles machine multi-clients) ════════════
+
+enum BatchStage {
+  lavage
+  sechage
+  calandrage
+  repassage
+  finition
+}
+
+enum BatchStatus {
+  suggested      // proposé par bin-packing IA
+  validated      // confirmé par superviseur
+  in_progress
+  completed
+  cancelled
+}
+
+model Batch {
+  id              String       @id @default(cuid())
+  code            String       @unique  // ex. B-0408
+  stage           BatchStage
+  status          BatchStatus  @default(suggested)
+  priority        Boolean      @default(false)
+
+  machineId       String
+  machine         Machine      @relation(fields: [machineId], references: [id])
+  programId       String?
+  program         WashingProgram? @relation(fields: [programId], references: [id])
+
+  capacity        Int          // kg ou pcs selon stage
+  currentLoad     Int          @default(0)
+  utilization     Float        @default(0)
+
+  estimatedDurationMin Int
+  startedAt       DateTime?
+  estimatedEndAt  DateTime?
+  completedAt     DateTime?
+
+  // Consommation effective
+  actualWaterL    Int?
+  actualEnergyKwh Int?
+
+  // Source de la suggestion
+  suggestedByAi   Boolean      @default(false)
+  aiScore         Float?
+  aiRationale     String?      @db.Text
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  contributors    BatchContributor[]
+  itemTags        ItemTag[]
+
+  @@index([stage, status])
+  @@index([machineId])
+}
+
+// Lien batch ↔ client (un batch = N contributors)
+model BatchContributor {
+  id              String       @id @default(cuid())
+  batchId         String
+  batch           Batch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  orderId         String
+  pieces          Int
+  weight          Int          // grammes
+
+  @@unique([batchId, orderId])
+  @@index([orderId])
+}
+
+// ════════════ TARIFFS & FACTURES ════════════
+
+enum TariffType {
+  standard
+  premium
+  forfait
+  segment
+  service
+}
+
+model Tariff {
+  id              String       @id @default(cuid())
+  code            String       @unique
+  name            String
+  type            TariffType
+  description     String?
+  isDefault       Boolean      @default(false)
+  isActive        Boolean      @default(true)
+  validFrom       DateTime
+  validUntil      DateTime?
+
+  // Forfait
+  monthlyPriceFcfa Decimal?    @db.Decimal(12, 2)
+  monthlyKgLimit  Int?
+  overagePerKgFcfa Decimal?    @db.Decimal(10, 2)
+
+  applicableClientTypes ClientType[]
+
+  items           TariffItem[]
+  clients         Client[]
+  invoices        Invoice[]
+
+  @@index([isActive])
+}
+
+model TariffItem {
+  id              String       @id @default(cuid())
+  tariffId        String
+  tariff          Tariff       @relation(fields: [tariffId], references: [id], onDelete: Cascade)
+  linenTypeCode   String
+  linenTypeName   String
+  pricePerKg      Decimal?     @db.Decimal(10, 2)
+  pricePerPiece   Decimal?     @db.Decimal(10, 2)
+  billingMode     BillingMode
+
+  @@index([tariffId])
+}
+
+enum InvoiceStatus {
+  draft
+  pending
+  paid
+  overdue
+  cancelled
+}
+
+model Invoice {
+  id              String       @id @default(cuid())
+  invoiceNumber   String       @unique
+  clientId        String
+  client          Client       @relation(fields: [clientId], references: [id])
+  tariffId        String?
+  tariff          Tariff?      @relation(fields: [tariffId], references: [id])
+
+  periodStart     DateTime
+  periodEnd       DateTime
+  invoiceDate     DateTime     @default(now())
+  dueDate         DateTime
+  paidDate        DateTime?
+
+  subtotalFcfa    Decimal      @db.Decimal(14, 2)
+  taxRate         Decimal      @db.Decimal(5, 4)  // ex. 0.18
+  taxAmountFcfa   Decimal      @db.Decimal(14, 2)
+  totalFcfa       Decimal      @db.Decimal(14, 2)
+  paidAmountFcfa  Decimal?     @db.Decimal(14, 2)
+  paymentMethod   String?
+
+  status          InvoiceStatus @default(draft)
+  pdfUrl          String?
+  notes           String?      @db.Text
+
+  // Versionnement optimistic locking
+  version         Int          @default(0)
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  lines           InvoiceLine[]
+
+  @@index([clientId, status])
+  @@index([dueDate])
+}
+
+model InvoiceLine {
+  id              String       @id @default(cuid())
+  invoiceId       String
+  invoice         Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  orderId         String?
+  order           Order?       @relation(fields: [orderId], references: [id])
+  linenTypeId     String?
+  linenType       LinenType?   @relation(fields: [linenTypeId], references: [id])
+  description     String
+  quantity        Int
+  weight          Int?         // grammes
+  unitPriceFcfa   Decimal      @db.Decimal(10, 2)
+  totalFcfa       Decimal      @db.Decimal(14, 2)
+
+  @@index([invoiceId])
+}
+
+// ════════════ AUDIT LOG ════════════
+
+enum AuditAction {
+  create
+  update
+  delete
+  login
+  logout
+  permission
+  scan
+  weigh
+  sign
+  print
+  ai_suggest
+  ai_validate
+}
+
+model AuditLog {
+  id              String       @id @default(cuid())
+  at              DateTime     @default(now())
+  actorId         String?
+  actor           User?        @relation(fields: [actorId], references: [id])
+  action          AuditAction
+  entity          String       // ex. "order", "batch", "invoice"
+  entityId        String?
+  payload         Json?
+  device          String?      // mobile / web / iot
+  ipAddress       String?
+  userAgent       String?
+  geoLat          Float?
+  geoLng          Float?
+
+  @@index([entity, entityId])
+  @@index([actorId])
+  @@index([at])
+}
+
+// ════════════ NOTIFICATIONS ════════════
+
+enum NotificationChannel {
+  email
+  push
+  sms
+}
+
+enum NotificationStatus {
+  queued
+  sent
+  failed
+}
+
+model Notification {
+  id              String              @id @default(cuid())
+  recipientUserId String?
+  recipientEmail  String?
+  recipientPhone  String?
+  channel         NotificationChannel
+  subject         String?
+  body            String              @db.Text
+  status          NotificationStatus  @default(queued)
+  sentAt          DateTime?
+  error           String?
+  metadata        Json?
+  createdAt       DateTime            @default(now())
+
+  @@index([status, channel])
+  @@index([recipientUserId])
+}
