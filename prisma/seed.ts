@@ -31,24 +31,47 @@ const PROGRAMS = [
   ['P22', 'NAE-Dry', 0, 50, 0, 0, 'Hydrocarbure', ['NAE']],
 ] as const;
 
+/** Pipeline standards pour les 3 grandes familles. */
+const PIPE_PLAT_CALANDRE = ['lavage', 'calandrage']; // drap, taie, nappe, torchon
+const PIPE_PLAT_SECHAGE = ['lavage', 'sechage', 'finition']; // housse couette, serviettes éponge
+const PIPE_FORME = ['lavage', 'sechage', 'finition']; // tout le linge de forme
+
+/** Catalogue officiel : 18 articles avec poids + pipeline par type. */
 const LINEN_TYPES = [
-  ['LP-001', 'Drap 2 personnes', 'LP', 800, 'weight', 300],
-  ['LP-002', 'Drap 1 personne', 'LP', 600, 'weight', 250],
-  ['LP-003', 'Taie d\'oreiller', 'LP', 200, 'piece', 150],
-  ['LP-004', 'Housse de couette', 'LP', 1500, 'piece', 500],
-  ['LP-005', 'Grande serviette éponge', 'LP', 500, 'weight', 250],
-  ['LP-006', 'Petite serviette éponge', 'LP', 300, 'weight', 200],
-  ['LP-007', 'Nappe légère', 'LP', 250, 'piece', 400],
-  ['LP-008', 'Nappe épaisse', 'LP', 700, 'piece', 600],
-  ['LP-009', 'Torchon', 'LP', 100, 'weight', 100],
-  ['LF-001', 'Chemise', 'LF', 200, 'piece', 400],
-  ['LF-002', 'Pantalon adulte', 'LF', 500, 'piece', 500],
-  ['LF-003', 'T-shirt adulte', 'LF', 150, 'piece', 300],
-  ['LF-004', 'Jean', 'LF', 700, 'piece', 600],
-  ['LF-005', 'Robe', 'LF', 400, 'piece', 500],
-  ['NAE-001', 'Veste costume', 'NAE', 600, 'piece', 2500],
-  ['NAE-002', 'Pantalon costume', 'NAE', 500, 'piece', 2000],
-  ['NAE-003', 'Article en soie', 'NAE', 200, 'piece', 3500],
+  // ── Linge plat : drap / taie / nappe / torchon → lavage + calandrage
+  ['LP-001', 'Drap de lit 2 personnes', 'LP', 800, 'weight', 300, PIPE_PLAT_CALANDRE],
+  ['LP-002', 'Drap de lit 1 personne', 'LP', 600, 'weight', 250, PIPE_PLAT_CALANDRE],
+  ['LP-003', 'Taie d\'oreiller / Housse de coussin', 'LP', 200, 'piece', 150, PIPE_PLAT_CALANDRE],
+  ['LP-007', 'Nappe légère', 'LP', 250, 'piece', 400, PIPE_PLAT_CALANDRE],
+  ['LP-008', 'Nappe épaisse', 'LP', 700, 'piece', 600, PIPE_PLAT_CALANDRE],
+  ['LP-009', 'Torchon ou serviette', 'LP', 100, 'weight', 100, PIPE_PLAT_CALANDRE],
+  // ── Linge plat éponge / housse → lavage + séchage + finition
+  ['LP-004', 'Housse de couette 2 personnes', 'LP', 1500, 'piece', 500, PIPE_PLAT_SECHAGE],
+  ['LP-005', 'Grande serviette éponge', 'LP', 500, 'weight', 250, PIPE_PLAT_SECHAGE],
+  ['LP-006', 'Petite serviette éponge', 'LP', 300, 'weight', 200, PIPE_PLAT_SECHAGE],
+  // ── Linge de forme → lavage + séchage + finition
+  ['LF-001', 'Jean taille adulte', 'LF', 700, 'piece', 600, PIPE_FORME],
+  ['LF-002', 'Pantalon coton adulte', 'LF', 500, 'piece', 500, PIPE_FORME],
+  ['LF-003', 'Pantalon coton enfant', 'LF', 120, 'piece', 300, PIPE_FORME],
+  ['LF-004', 'Jupe', 'LF', 400, 'piece', 400, PIPE_FORME],
+  ['LF-005', 'Chemise adulte', 'LF', 200, 'piece', 400, PIPE_FORME],
+  ['LF-006', 'T-shirt adulte', 'LF', 150, 'piece', 300, PIPE_FORME],
+  ['LF-007', 'Robe légère adulte', 'LF', 150, 'piece', 400, PIPE_FORME],
+  ['LF-008', 'Robe épaisse', 'LF', 500, 'piece', 500, PIPE_FORME],
+  ['LF-009', 'Sweat-shirt adulte', 'LF', 400, 'piece', 400, PIPE_FORME],
+] as const;
+
+const SERVICES = [
+  ['blanchisserie', 'Blanchisserie', 'Lavage standard du linge plat et de forme.', 1],
+  ['nettoyage', 'Nettoyage à sec', 'Pressing pour articles délicats (NAE).', 2],
+  ['aqua_clean', 'Aqua Clean', 'Lavage à l\'eau pour textiles techniques.', 3],
+] as const;
+
+/** Catégories de linge avec label FR + emoji pour affichage UI. */
+const LINEN_CATEGORIES = [
+  ['LP', 'Linge plat', '🛏', 1],
+  ['LF', 'Linge forme', '👔', 2],
+  ['NAE', 'Nettoyage à sec', '🥋', 3],
 ] as const;
 
 const MACHINES = [
@@ -99,22 +122,58 @@ async function main() {
   }
   console.log(`  ✓ ${PROGRAMS.length} washing programs`);
 
-  // Linen types
-  for (const [code, name, cat, w, mode, price] of LINEN_TYPES) {
+  // Linen types — upsert avec MISE À JOUR systématique du name/weight/pipeline
+  // pour propager toute évolution du catalogue.
+  for (const [code, name, cat, w, mode, price, pipeline] of LINEN_TYPES) {
+    const data = {
+      code: code as string,
+      name: name as string,
+      category: cat as 'LP' | 'LF' | 'NAE',
+      averageWeight: w as number,
+      billingMode: mode as 'weight' | 'piece',
+      unitPrice: price as number,
+      pipeline: pipeline as string[],
+    };
     await prisma.linenType.upsert({
-      where: { code },
-      update: {},
-      create: {
-        code,
-        name,
-        category: cat as 'LP' | 'LF' | 'NAE',
-        averageWeight: w,
-        billingMode: mode as 'weight' | 'piece',
-        unitPrice: price,
+      where: { code: code as string },
+      update: {
+        name: data.name,
+        category: data.category,
+        averageWeight: data.averageWeight,
+        billingMode: data.billingMode,
+        unitPrice: data.unitPrice,
+        pipeline: data.pipeline,
       },
+      create: data,
     });
   }
-  console.log(`  ✓ ${LINEN_TYPES.length} linen types`);
+  // Nettoie les anciens codes qui ne sont plus dans le catalogue officiel
+  // (ex: NAE-* ou anciennes versions LF).
+  const keepCodes = LINEN_TYPES.map(([c]) => c as string);
+  const removed = await prisma.linenType.deleteMany({
+    where: { code: { notIn: keepCodes } },
+  });
+  console.log(`  ✓ ${LINEN_TYPES.length} linen types (catalogue officiel)${removed.count > 0 ? ` · ${removed.count} obsolète(s) supprimé(s)` : ''}`);
+
+  // Services
+  for (const [code, label, description, sortOrder] of SERVICES) {
+    await prisma.service.upsert({
+      where: { code },
+      update: {},
+      create: { code, label, description, sortOrder },
+    });
+  }
+  console.log(`  ✓ ${SERVICES.length} services`);
+
+  // Catégories de linge (config affichage)
+  for (const [code, label, emoji, sortOrder] of LINEN_CATEGORIES) {
+    await prisma.linenCategoryConfig.upsert({
+      where: { code: code as 'LP' | 'LF' | 'NAE' },
+      update: { label, emoji, sortOrder },
+      create: { code: code as 'LP' | 'LF' | 'NAE', label, emoji, sortOrder },
+    });
+  }
+  console.log(`  ✓ ${LINEN_CATEGORIES.length} catégories de linge`);
 
   // Machines
   for (const [ref, brand, model, kind, cap, loc] of MACHINES) {

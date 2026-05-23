@@ -23,6 +23,13 @@ enum Role {
   hotel
 }
 
+enum DriverAvailability {
+  available     // disponible, pret a prendre une tournee
+  on_route      // en tournee active
+  off_duty      // fin de service
+  unavailable   // conge / maladie / indispo
+}
+
 model User {
   id            String    @id @default(cuid())
   email         String    @unique
@@ -32,6 +39,8 @@ model User {
   lastName      String
   role          Role
   isActive      Boolean   @default(true)
+  // Disponibilite chauffeur (utile uniquement si role = driver).
+  driverStatus  DriverAvailability? @default(available)
   lastLoginAt   DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -40,12 +49,30 @@ model User {
   clientId          String?         // si role = hotel
   client            Client?         @relation(fields: [clientId], references: [id])
   refreshTokens     RefreshToken[]
+  pushTokens        UserPushToken[]
   auditLogs         AuditLog[]
   collectionsAsDrv  Order[]         @relation("DriverCollect")
   deliveriesAsDrv   Order[]         @relation("DriverDeliver")
+  enrolledOnVehicles Vehicle[]      @relation("VehicleEnrolledDriver")
+  enrollmentHistory  VehicleEnrollment[] @relation("EnrollmentDriver")
 
   @@index([role, isActive])
   @@index([clientId])
+}
+
+model UserPushToken {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token         String    @unique  // ex. ExponentPushToken[xxxxx]
+  platform      String    // ios | android | web
+  deviceName    String?
+  isActive      Boolean   @default(true)
+  lastUsedAt    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId, isActive])
 }
 
 model RefreshToken {
@@ -73,6 +100,11 @@ enum ClientType {
   autre
 }
 
+enum BillingPeriodicity {
+  per_order   // facture émise dès la livraison de la commande
+  monthly     // factures groupées en fin de mois
+}
+
 model Client {
   id              String     @id @default(cuid())
   name            String
@@ -87,6 +119,8 @@ model Client {
   geoLng          Float?
   tariffId        String?
   tariff          Tariff?    @relation(fields: [tariffId], references: [id])
+  // Mode de facturation : par commande livree (defaut) ou groupee mensuelle.
+  billingMode     BillingPeriodicity @default(per_order)
   isActive        Boolean    @default(true)
   notes           String?    @db.Text
   createdAt       DateTime   @default(now())
@@ -95,8 +129,24 @@ model Client {
   users           User[]
   orders          Order[]
   invoices        Invoice[]
+  creditNotes     CreditNote[]
 
   @@index([type, isActive])
+}
+
+// ════════════ CATALOGUE SERVICES ════════════
+
+model Service {
+  id          String   @id @default(cuid())
+  code        String   @unique // ex: "blanchisserie", "nettoyage", "aqua_clean"
+  label       String              // ex: "Blanchisserie", "Nettoyage à sec"
+  description String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
 }
 
 // ════════════ CATALOGUE LINGE ════════════
@@ -105,6 +155,20 @@ enum LinenCategory {
   LP    // Linge Plat
   LF    // Linge Forme
   NAE   // Nettoyage à sec
+}
+
+// Configuration affichage des catégories de linge (label FR + emoji + ordre).
+// Codes fixes (FK enum). Seuls label / emoji / sortOrder / isActive sont editables.
+// Permet a l'admin de renommer "Linge Plat" -> "Draps & taies" sans toucher au code.
+model LinenCategoryConfig {
+  id        String        @id @default(cuid())
+  code      LinenCategory @unique
+  label     String
+  emoji     String?
+  sortOrder Int           @default(0)
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 }
 
 enum BillingMode {
@@ -122,6 +186,12 @@ model LinenType {
   unitPrice       Decimal       @db.Decimal(10, 2)
   treatmentMinutes Int?
   notes           String?
+  // URL relative ou absolue de l'image affichee (mobile catalogue + back-office).
+  // Renseignee par upload via /uploads/linen-type-images.
+  imageUrl        String?
+  // Pipeline de production par-type (etapes ordonnees).
+  // Valeurs valides : lavage / sechage / calandrage / repassage / finition.
+  pipeline        String[]      @default([])
   isActive        Boolean       @default(true)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
@@ -252,13 +322,22 @@ model Order {
   // Pesée chauffeur (terrain)
   driverWeight      Int?          // grammes
   driverPieces      Int?
+  // Détail par type validé par le chauffeur : [{ type, quantity }]
+  driverItems       Json?
   visualEstimation  String?       // S/M/L/XL
   collectionPhotos  String[]      // URLs
 
   // Pesée atelier (officielle = base facturation)
   receivedWeight    Int?          // grammes
   receivedPieces    Int?
+  // Détail par type comptabilisé à la pesée atelier : [{ type, quantity }]
+  receivedItems     Json?
   weightDeviation   Float?        // % calculé
+
+  // Localisation cible de collecte (renseignée par le client à la création).
+  // Utilisée par le chauffeur pour la navigation (deeplink maps).
+  pickupGeoLat      Float?
+  pickupGeoLng      Float?
 
   // Dates clés
   collectionDate    DateTime
@@ -274,6 +353,17 @@ model Order {
   collectionDriver   User?        @relation("DriverCollect", fields: [collectionDriverId], references: [id])
   collectionVehicleId String?
   collectionVehicle  Vehicle?     @relation("CollectVehicle", fields: [collectionVehicleId], references: [id])
+  collectionPdaId    String?
+  collectionPda      Pda?         @relation("CollectPda", fields: [collectionPdaId], references: [id])
+  // Tournee de collecte groupee (plusieurs commandes regroupees sur un meme vehicule).
+  collectionRoundId  String?
+  collectionRound    CollectionRound? @relation("CollectRound", fields: [collectionRoundId], references: [id])
+  // Timestamp de retour usine après collecte : marque que le chauffeur a
+  // physiquement déposé les sacs à l'atelier. Sert de gate avant la pesée.
+  unloadedAt         DateTime?
+  // Tournee de livraison groupee (commandes livrees ensemble apres production).
+  deliveryRoundId    String?
+  deliveryRound      CollectionRound? @relation("DeliveryRound", fields: [deliveryRoundId], references: [id])
   collectionGeoLat   Float?
   collectionGeoLng   Float?
   collectionSignatureUrl String?
@@ -283,6 +373,8 @@ model Order {
   deliveryDriver    User?         @relation("DriverDeliver", fields: [deliveryDriverId], references: [id])
   deliveryVehicleId String?
   deliveryVehicle   Vehicle?      @relation("DeliverVehicle", fields: [deliveryVehicleId], references: [id])
+  deliveryPdaId     String?
+  deliveryPda       Pda?          @relation("DeliverPda", fields: [deliveryPdaId], references: [id])
   deliveryPhotos    String[]
   deliverySignatureUrl String?
   deliveryRecipientName String?
@@ -299,6 +391,7 @@ model Order {
   triage            TriageRecord?
   itemTags          ItemTag[]
   invoiceLines      InvoiceLine[]
+  batchContributions BatchContributor[]
 
   @@index([clientId, status])
   @@index([workflowState])
@@ -326,8 +419,128 @@ model Vehicle {
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
+  // Enrollement courant (cache denormalise pour lookup rapide).
+  // L'historique complet est dans VehicleEnrollment (start/end dates).
+  enrolledDriverId  String?
+  enrolledDriver    User?       @relation("VehicleEnrolledDriver", fields: [enrolledDriverId], references: [id])
+  enrolledPdaId     String?
+  enrolledPda       Pda?        @relation("VehicleEnrolledPda", fields: [enrolledPdaId], references: [id])
+  enrolledSince     DateTime?   // debut de l'enrollement courant
+
   collectOrders   Order[]       @relation("CollectVehicle")
   deliverOrders   Order[]       @relation("DeliverVehicle")
+  enrollments     VehicleEnrollment[]
+  collectionRounds CollectionRound[]
+
+  @@index([status])
+}
+
+// ════════════ TOURNEE DE COLLECTE ════════════
+
+enum CollectionRoundStatus {
+  planned       // tournee creee, commandes affectees, pas encore demarree
+  in_progress   // chauffeur a demarre la tournee
+  completed     // toutes les commandes de la tournee ont ete collectees
+  cancelled     // annulee, commandes liberees
+}
+
+// Type de tournee : collecte chez le client OU livraison chez le client.
+// Une tournee = un trajet, soit pour ramasser (collect) soit pour deposer (delivery).
+enum RoundType {
+  collect
+  delivery
+}
+
+// Tournee de collecte : ensemble de commandes groupees sur un meme vehicule
+// pour une date+heure donnees. Un round = un trajet.
+// Pattern : on cree un round avec plusieurs commandes, l'equipage (chauffeur+PDA)
+// est derive de l'enrollement du vehicule, toutes les commandes passent en
+// collection_planned d'un coup.
+model CollectionRound {
+  id              String                @id @default(cuid())
+  number          String                @unique             // RND-YYYY-NNN
+  type            RoundType             @default(collect)   // collect = ramassage, delivery = livraison
+  vehicleId       String
+  vehicle         Vehicle               @relation(fields: [vehicleId], references: [id])
+  plannedAt       DateTime              // date+heure de demarrage prevu
+  status          CollectionRoundStatus @default(planned)
+  notes           String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  // Arrivee usine (rounds collecte uniquement) : timestamp ou le chauffeur
+  // a deposer les sacs a l'atelier. Debloque la pesee cote atelier.
+  unloadedAt           DateTime?
+  // Signature du receptionnaire atelier qui confirme l'arrivee des sacs.
+  unloadedSignatureUrl String?
+  unloadedRecipientName String?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  createdById     String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  // Relations explicites : un round est soit "collect" (orders via collectionRoundId)
+  // soit "delivery" (orders via deliveryRoundId), determinee par `type`.
+  collectOrders   Order[]               @relation("CollectRound")
+  deliveryOrders  Order[]               @relation("DeliveryRound")
+
+  @@index([status])
+  @@index([type])
+  @@index([vehicleId])
+  @@index([plannedAt])
+}
+
+// Historique des enrollements (crew binding) d'un vehicule.
+// Une seule ligne "active" par vehicule (endsAt IS NULL).
+// Quand on cree un nouvel enrollement, on cloture l'ancien (endsAt = now).
+model VehicleEnrollment {
+  id          String   @id @default(cuid())
+  vehicleId   String
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  driverId    String?
+  driver      User?    @relation("EnrollmentDriver", fields: [driverId], references: [id])
+  pdaId       String?
+  pda         Pda?     @relation("EnrollmentPda", fields: [pdaId], references: [id])
+  startsAt    DateTime
+  endsAt      DateTime?
+  notes       String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([vehicleId, endsAt])
+  @@index([driverId])
+  @@index([pdaId])
+}
+
+// ════════════ PDA (handheld devices terrain) ════════════
+
+enum PdaStatus {
+  available
+  in_use
+  maintenance
+  out_of_service
+}
+
+// Personal Digital Assistant : terminal portable utilise par les chauffeurs
+// pour scanner les sacs, signer les bons et synchroniser la commande.
+// Le lien chauffeur passe par Vehicle.enrolledPdaId (pattern enrollement).
+model Pda {
+  id              String     @id @default(cuid())
+  reference       String     @unique     // ex. PDA-001 ou n° de serie
+  brand           String?
+  model           String?
+  status          PdaStatus  @default(available)
+  batteryLevel    Int?       // 0-100
+  lastSyncAt      DateTime?
+  isActive        Boolean    @default(true)
+  notes           String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  collectOrders   Order[]    @relation("CollectPda")
+  deliverOrders   Order[]    @relation("DeliverPda")
+  enrolledOnVehicles Vehicle[] @relation("VehicleEnrolledPda")
+  enrollmentHistory VehicleEnrollment[] @relation("EnrollmentPda")
 
   @@index([status])
 }
@@ -474,6 +687,7 @@ model BatchContributor {
   batchId         String
   batch           Batch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
   orderId         String
+  order           Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   pieces          Int
   weight          Int          // grammes
 
@@ -658,4 +872,123 @@ model Notification {
 
   @@index([status, channel])
   @@index([recipientUserId])
+}
+
+// ════════════ DOCUMENTS COMMERCIAUX ════════════
+
+enum DocumentType {
+  BON_COMMANDE
+  BON_COLLECTE
+  BORDEREAU_TRIAGE
+  BON_LIVRAISON
+  FACTURE
+  AVOIR
+}
+
+// Compteur sequentiel par type et par annee : produit les numeros
+// CMD-2026-001, BCOL-2026-001, BL-2026-001, AV-2026-001, etc.
+model DocumentSequence {
+  id        String       @id @default(cuid())
+  type      DocumentType
+  year      Int
+  counter   Int          @default(0)
+
+  @@unique([type, year])
+}
+
+enum DeliveryMethod {
+  email
+  sms
+  manual_download
+}
+
+enum DeliveryStatus {
+  pending
+  sent
+  failed
+}
+
+// Trace des envois de documents (BL, BCol, Facture, Avoir) au client.
+// Permet l'audit "a-t-on bien envoye le BL au client X le jour J ?"
+model DocumentDelivery {
+  id             String         @id @default(cuid())
+  type           DocumentType
+  number         String         // ex: "BL-2026-042"
+  orderId        String?
+  invoiceId      String?
+  recipientEmail String
+  recipientName  String?
+  method         DeliveryMethod @default(email)
+  status         DeliveryStatus @default(pending)
+  errorMessage   String?
+  sentAt         DateTime?
+  attempt        Int            @default(0)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([orderId])
+  @@index([type, status])
+  @@index([number])
+}
+
+// Identite de l'entreprise utilisee dans tous les PDFs (header + footer).
+// Une seule ligne (singleton). Editable depuis le back-office.
+model CompanySettings {
+  id              String   @id @default(cuid())
+  // Identite
+  companyName     String
+  legalForm       String?
+  ninea           String?
+  rcNumber        String?
+  // Contact
+  address         String
+  city            String
+  postalCode      String?
+  country         String   @default("Senegal")
+  phone           String?
+  email           String?
+  website         String?
+  // Branding
+  logoUrl         String?
+  // Comptabilite
+  vatRate         Decimal  @default(0.18) @db.Decimal(5, 4)
+  bankName        String?
+  bankAccount     String?
+  bankSwift       String?
+  // Mentions legales footer
+  legalMentions   String?  @db.Text
+  paymentTerms    String   @default("Paiement sous 30 jours")
+  // Metadonnees
+  updatedAt       DateTime @updatedAt
+  updatedBy       String?
+}
+
+// ════════════ AVOIRS (CREDIT NOTES) ════════════
+
+enum CreditNoteStatus {
+  draft
+  issued
+  cancelled
+}
+
+// Avoir / note de credit. Genere en cas de litige (linge perdu, abime,
+// surfacturation, etc.). Lie a une commande et/ou une facture.
+model CreditNote {
+  id              String           @id @default(cuid())
+  number          String           @unique           // AV-YYYY-NNN
+  orderId         String?
+  invoiceId       String?
+  clientId        String
+  client          Client           @relation(fields: [clientId], references: [id])
+  reason          String           @db.Text
+  amountFcfa      Decimal          @db.Decimal(14, 2)
+  status          CreditNoteStatus @default(draft)
+  issuedAt        DateTime?
+  pdfUrl          String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  createdById     String?
+
+  @@index([clientId])
+  @@index([orderId])
 }

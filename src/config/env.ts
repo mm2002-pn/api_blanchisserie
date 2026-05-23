@@ -24,7 +24,8 @@ const schema = z.object({
   JWT_REFRESH_TTL: z.string().default('30d'),
 
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
-  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+  // 10 req/s par IP — back-office interne, pas une API publique
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
 
   ARGON_MEMORY_COST: z.coerce.number().int().positive().default(19_456),
   ARGON_TIME_COST: z.coerce.number().int().positive().default(2),
@@ -40,6 +41,21 @@ const schema = z.object({
   ENABLE_EMAIL: z.coerce.boolean().default(false),
   ENABLE_PUSH: z.coerce.boolean().default(false),
   ENABLE_SMS: z.coerce.boolean().default(false),
+
+  SMTP_HOST: z.string().default(''),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_SECURE: z.coerce.boolean().default(false),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASS: z.string().default(''),
+  SMTP_FROM: z.string().default('Blanchisserie SN <no-reply@blanchisserie.sn>'),
+
+  ENABLE_CRON: z.coerce.boolean().default(false),
+  CRON_TZ: z.string().default('Africa/Dakar'),
+  CRON_NOTIFICATIONS: z.string().default('* * * * *'),         // chaque minute
+  CRON_MARK_OVERDUE: z.string().default('0 6 * * *'),          // chaque jour 06:00
+  CRON_AUTO_INVOICE: z.string().default('0 8 1 * *'),          // 1er du mois 08:00
+
+  EXPO_ACCESS_TOKEN: z.string().default(''),                   // optionnel (rate limit augmenté)
 });
 
 const parsed = schema.safeParse(process.env);

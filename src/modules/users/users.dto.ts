@@ -38,10 +38,14 @@ export const resetPasswordAdminSchema = z.object({
   newPassword: z.string().min(8).max(200),
 });
 
+export const setDriverStatusSchema = z.object({
+  driverStatus: z.enum(['available', 'on_route', 'off_duty', 'unavailable']),
+});
+
 export const listUsersSchema = z.object({
   role: roleEnum.optional(),
   search: z.string().optional(),
   isActive: z.coerce.boolean().optional(),
   page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().positive().max(100).default(20),
+  pageSize: z.coerce.number().int().positive().max(200).default(20),
 });

@@ -12,6 +12,7 @@ export const createLinenTypeSchema = z.object({
   unitPrice: z.number().nonnegative(),
   treatmentMinutes: z.number().int().nonnegative().optional(),
   notes: z.string().max(500).optional(),
+  imageUrl: z.string().min(1).max(500).nullable().optional(),
   isActive: z.boolean().default(true),
 });
 

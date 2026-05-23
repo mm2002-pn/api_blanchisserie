@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler } from 'express';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
+import multer from 'multer';
 import { AppError } from '../utils/errors.js';
 import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
@@ -57,7 +58,21 @@ export const errorMiddleware: ErrorRequestHandler = (err, req, res, _next) => {
     });
   }
 
-  // 4) Erreurs applicatives typées
+  // 4) Multer (upload) — taille / champ inattendu / trop de fichiers
+  if (err instanceof multer.MulterError) {
+    const map: Record<string, { code: string; status: number }> = {
+      LIMIT_FILE_SIZE: { code: 'FILE_TOO_LARGE', status: 413 },
+      LIMIT_FILE_COUNT: { code: 'TOO_MANY_FILES', status: 400 },
+      LIMIT_UNEXPECTED_FILE: { code: 'UNEXPECTED_FIELD', status: 400 },
+      LIMIT_PART_COUNT: { code: 'TOO_MANY_PARTS', status: 400 },
+    };
+    const m = map[err.code] ?? { code: 'UPLOAD_ERROR', status: 400 };
+    return res.status(m.status).json({
+      error: { code: m.code, message: err.message, details: { field: err.field } },
+    });
+  }
+
+  // 5) Erreurs applicatives typées
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({
       error: {

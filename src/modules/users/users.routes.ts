@@ -7,6 +7,7 @@ import {
   createUserSchema,
   listUsersSchema,
   resetPasswordAdminSchema,
+  setDriverStatusSchema,
   updateUserSchema,
 } from './users.dto.js';
 import * as svc from './users.service.js';
@@ -92,6 +93,28 @@ usersRouter.delete(
       throw new ForbiddenError('Cannot deactivate yourself');
     }
     const user = await svc.deactivateUser(req.user.id, req.params.id as string);
+    res.json(user);
+  }),
+);
+
+/** Change la disponibilite d'un chauffeur.
+ *  Admin/manager/supervisor peuvent agir sur n'importe quel chauffeur ;
+ *  le chauffeur lui-meme peut changer son propre statut depuis le mobile. */
+usersRouter.patch(
+  '/:id/driver-status',
+  validate({ body: setDriverStatusSchema }),
+  asyncHandler(async (req, res) => {
+    if (!req.user) throw new UnauthorizedError();
+    const isSelf = req.user.id === req.params.id;
+    const isPriv = ['admin', 'manager', 'supervisor'].includes(req.user.role);
+    if (!isSelf && !isPriv) {
+      throw new ForbiddenError();
+    }
+    const user = await svc.setDriverStatus(
+      req.user.id,
+      req.params.id as string,
+      req.body.driverStatus,
+    );
     res.json(user);
   }),
 );

@@ -2,6 +2,8 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { prisma } from './config/prisma.js';
+import { startScheduler, stopScheduler } from './jobs/scheduler.js';
+import { closeSocketServer, initSocketServer } from './realtime/socket.js';
 
 async function main() {
   // Vérifie la connexion DB au boot
@@ -21,9 +23,14 @@ async function main() {
     );
   });
 
+  initSocketServer(server);
+  startScheduler();
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down gracefully…`);
+    stopScheduler();
+    closeSocketServer();
     server.close(() => logger.info('HTTP server closed'));
     await prisma.$disconnect();
     process.exit(0);

@@ -1,4 +1,6 @@
 import { prisma } from '../../config/prisma.js';
+import { logger } from '../../config/logger.js';
+import { generateBordereauTriage } from '../documents/documents.generator.js';
 import {
   BadRequestError,
   ConflictError,
@@ -26,7 +28,7 @@ export async function createTriage(
   actorUserId: string,
   dto: CreateTriageDto,
 ) {
-  return prisma.$transaction(
+  const result = await prisma.$transaction(
     async (tx) => {
       const order = await tx.order.findUnique({ where: { id: orderId } });
       if (!order) throw new NotFoundError('Order not found');
@@ -143,6 +145,13 @@ export async function createTriage(
     },
     { isolationLevel: 'Serializable', timeout: 15000 },
   );
+
+  // Génère le bordereau de triage (interne, pas d'email client) — non-bloquant.
+  void generateBordereauTriage(orderId).catch((err) =>
+    logger.warn({ err, orderId }, 'BT generation failed (non-blocking)'),
+  );
+
+  return result;
 }
 
 /**

@@ -12,6 +12,7 @@ const PUBLIC_SELECT = {
   role: true,
   isActive: true,
   clientId: true,
+  driverStatus: true,
   lastLoginAt: true,
   createdAt: true,
   updatedAt: true,
@@ -206,4 +207,32 @@ export async function deactivateUser(actorId: string, id: string) {
 
     return updated;
   });
+}
+
+/** Met a jour la disponibilite d'un chauffeur (admin/manager/supervisor ou le chauffeur lui-meme). */
+export async function setDriverStatus(
+  actorId: string,
+  userId: string,
+  driverStatus: 'available' | 'on_route' | 'off_duty' | 'unavailable',
+) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new NotFoundError('User not found');
+  if (user.role !== 'driver') {
+    throw new ConflictError('User is not a driver');
+  }
+  const updated = await prisma.user.update({
+    where: { id: userId },
+    data: { driverStatus },
+    select: PUBLIC_SELECT,
+  });
+  await prisma.auditLog.create({
+    data: {
+      actorId,
+      action: 'update',
+      entity: 'user',
+      entityId: userId,
+      payload: { event: 'driver_status', driverStatus },
+    },
+  });
+  return updated;
 }

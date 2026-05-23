@@ -21,6 +21,9 @@ export type ItemForBatching = {
   programCategoryCompat: ('LP' | 'LF' | 'NAE')[];
   category: 'LP' | 'LF' | 'NAE';
   priority: boolean;
+  /** Métadonnées article (pour affichage UI). */
+  linenTypeCode?: string;
+  linenTypeName?: string;
 };
 
 export type MachineForBatching = {
@@ -58,103 +61,162 @@ export type BinPackingResult = {
 
 /* ───────── Best-Fit Decreasing (heuristique) ───────── */
 
+/**
+ * Best-Fit Decreasing avec parallélisation multi-machines.
+ *
+ * Différences vs l'ancienne version (qui empilait tout sur la plus grosse
+ * laveuse) :
+ *  - on maintient des "bins ouverts" (= des batches en cours de remplissage),
+ *    chaque bin attaché à une machine ;
+ *  - pour chaque item, on essaie d'abord de le glisser dans le bin ouvert
+ *    le plus serré (même programme, residual minimum) → best-fit ;
+ *  - sinon on ouvre un nouveau bin sur la machine **la moins chargée** à
+ *    ce moment-là → load-balance équitable entre laveuses.
+ *
+ * Conséquence : les cycles se répartissent naturellement sur LAV-001 +
+ * LAV-002 + LAV-003… proportionnellement à leur capacité.
+ */
 export function heuristicBinPacking(
   items: ItemForBatching[],
   machines: MachineForBatching[],
 ): BinPackingResult {
-  // 1. Grouper les items par programme + catégorie
+  type OpenBin = {
+    machineId: string;
+    machineRef: string;
+    capacityKg: number;
+    programId: string;
+    programName: string;
+    items: ItemForBatching[];
+    totalKg: number;
+  };
+
+  // Laveuses actives — pas de tri spécifique, on s'appuie sur la charge
+  // courante pour décider quelle machine ouvrir.
+  const usableMachines = machines.filter(
+    (m) => m.status === 'active' && m.kind === 'laveuse',
+  );
+
+  if (usableMachines.length === 0) {
+    return {
+      batches: [],
+      source: 'heuristic',
+      meta: { itemsPlaced: 0, itemsLeftover: items.length, averageUtilization: 0 },
+    };
+  }
+
+  // Charge totale (kg) déjà affectée à chaque machine — sert au load-balancing
+  const machineLoadKg = new Map<string, number>();
+  for (const m of usableMachines) machineLoadKg.set(m.id, 0);
+
+  // Grouper par programme (interdit de mélanger 2 programmes dans un cycle)
   const groups = new Map<string, ItemForBatching[]>();
   for (const item of items) {
     if (!groups.has(item.programId)) groups.set(item.programId, []);
     groups.get(item.programId)!.push(item);
   }
 
-  const batches: SuggestedBatch[] = [];
+  const openBins: OpenBin[] = [];
   const leftover: ItemForBatching[] = [];
 
-  // Tri des machines actives par capacité décroissante
-  const usableMachines = machines
-    .filter((m) => m.status === 'active' && m.kind === 'laveuse')
-    .sort((a, b) => b.capacityKg - a.capacityKg);
-
   for (const [programId, programItems] of groups) {
-    // Tri des items par poids décroissant + priorité (PRIO d'abord)
+    // Tri PRIO d'abord, puis poids décroissant (les gros morceaux ouvrent
+    // les bins, les petits viennent les compléter en best-fit derrière).
     const sorted = [...programItems].sort((a, b) => {
       if (a.priority !== b.priority) return a.priority ? -1 : 1;
       return b.weight - a.weight;
     });
 
-    const remaining = [...sorted];
-    while (remaining.length > 0) {
-      // Trouve la machine avec le best-fit pour le 1er item
-      const head = remaining[0];
-      if (!head) break;
-      const headKg = head.weight / 1000;
+    for (const item of sorted) {
+      const itKg = item.weight / 1000;
 
-      const candidate =
-        usableMachines.find((m) => m.capacityKg >= headKg) ?? usableMachines[0];
-      if (!candidate || candidate.capacityKg < headKg) {
-        // Item trop lourd pour toute machine
-        leftover.push(head);
-        remaining.shift();
+      // 1) Essayer de loger l'item dans un bin déjà ouvert sur le bon
+      //    programme. On choisit le bin qui aura le moins de capacité
+      //    résiduelle après ajout (true best-fit) → on serre les batches.
+      let bestBin: OpenBin | undefined;
+      let bestResidual = Infinity;
+      for (const bin of openBins) {
+        if (bin.programId !== programId) continue;
+        const residualAfter = bin.capacityKg - (bin.totalKg + itKg);
+        if (residualAfter >= 0 && residualAfter < bestResidual) {
+          bestBin = bin;
+          bestResidual = residualAfter;
+        }
+      }
+
+      if (bestBin) {
+        bestBin.items.push(item);
+        bestBin.totalKg += itKg;
+        machineLoadKg.set(
+          bestBin.machineId,
+          (machineLoadKg.get(bestBin.machineId) ?? 0) + itKg,
+        );
         continue;
       }
 
-      // Remplit la machine en best-fit
-      let totalKg = 0;
-      const placedItems: ItemForBatching[] = [];
-      for (let i = 0; i < remaining.length; i++) {
-        const it = remaining[i];
-        if (!it) continue;
-        const itKg = it.weight / 1000;
-        if (totalKg + itKg <= candidate.capacityKg) {
-          placedItems.push(it);
-          totalKg += itKg;
-        }
+      // 2) Aucun bin existant ne peut accueillir cet item → on en ouvre un
+      //    nouveau sur la **machine la moins chargée** qui peut le tenir.
+      const eligible = usableMachines.filter((m) => m.capacityKg >= itKg);
+      if (eligible.length === 0) {
+        // Item trop lourd pour toute laveuse → leftover
+        leftover.push(item);
+        continue;
       }
-      // Retire les items placés
-      remaining.splice(
-        0,
-        remaining.length,
-        ...remaining.filter((it) => !placedItems.includes(it)),
-      );
-
-      // Construit les contributors (groupés par client)
-      const byClient = new Map<
-        string,
-        { orderId: string; clientName: string; weight: number; pieces: number }
-      >();
-      for (const it of placedItems) {
-        const key = it.orderId;
-        const existing = byClient.get(key);
-        if (existing) {
-          existing.weight += it.weight;
-          existing.pieces += 1;
-        } else {
-          byClient.set(key, {
-            orderId: it.orderId,
-            clientName: it.clientName,
-            weight: it.weight,
-            pieces: 1,
-          });
-        }
-      }
-
-      const programName = placedItems[0]?.programName ?? '';
-
-      batches.push({
-        machineId: candidate.id,
-        machineRef: candidate.reference,
-        programId,
-        programName,
-        capacity: candidate.capacityKg,
-        items: placedItems,
-        totalWeight: totalKg,
-        utilization: Math.min(1, totalKg / candidate.capacityKg),
-        contributors: Array.from(byClient.values()),
+      // Plus petite charge cumulée d'abord (round-robin pondéré naturellement)
+      const target = eligible.reduce((best, m) => {
+        const loadBest = machineLoadKg.get(best.id) ?? 0;
+        const loadM = machineLoadKg.get(m.id) ?? 0;
+        return loadM < loadBest ? m : best;
       });
+
+      const newBin: OpenBin = {
+        machineId: target.id,
+        machineRef: target.reference,
+        capacityKg: target.capacityKg,
+        programId,
+        programName: item.programName,
+        items: [item],
+        totalKg: itKg,
+      };
+      openBins.push(newBin);
+      machineLoadKg.set(
+        target.id,
+        (machineLoadKg.get(target.id) ?? 0) + itKg,
+      );
     }
   }
+
+  // Convertit les bins en batches avec contributors par client
+  const batches: SuggestedBatch[] = openBins.map((bin) => {
+    const byClient = new Map<
+      string,
+      { orderId: string; clientName: string; weight: number; pieces: number }
+    >();
+    for (const it of bin.items) {
+      const existing = byClient.get(it.orderId);
+      if (existing) {
+        existing.weight += it.weight;
+        existing.pieces += 1;
+      } else {
+        byClient.set(it.orderId, {
+          orderId: it.orderId,
+          clientName: it.clientName,
+          weight: it.weight,
+          pieces: 1,
+        });
+      }
+    }
+    return {
+      machineId: bin.machineId,
+      machineRef: bin.machineRef,
+      programId: bin.programId,
+      programName: bin.programName,
+      capacity: bin.capacityKg,
+      items: bin.items,
+      totalWeight: bin.totalKg,
+      utilization: Math.min(1, bin.totalKg / bin.capacityKg),
+      contributors: Array.from(byClient.values()),
+    };
+  });
 
   const avgUtil =
     batches.length > 0
@@ -162,10 +224,10 @@ export function heuristicBinPacking(
       : 0;
 
   // Économie estimée vs traitement individuel par client
-  // On suppose un cycle = ~150L. Si N clients étaient lavés séparément à
-  // sub-charge, on aurait N cycles partiels. En batchant, on économise
-  // (N-1) cycles d'eau.
-  const totalContributors = batches.reduce((s, b) => s + b.contributors.length, 0);
+  const totalContributors = batches.reduce(
+    (s, b) => s + b.contributors.length,
+    0,
+  );
   const waterSaved = Math.max(0, (totalContributors - batches.length) * 60);
   const energySaved = Math.max(0, (totalContributors - batches.length) * 3);
 
@@ -258,8 +320,10 @@ export async function validateWithGroq(
 export async function suggestBatches(
   items: ItemForBatching[],
   machines: MachineForBatching[],
+  opts: { useAi?: boolean } = {},
 ): Promise<BinPackingResult> {
   const heuristic = heuristicBinPacking(items, machines);
-  if (!groq || items.length === 0) return heuristic;
+  // Mode manuel explicite OU pas de Groq OU pool vide → heuristique seule
+  if (opts.useAi === false || !groq || items.length === 0) return heuristic;
   return validateWithGroq(heuristic);
 }

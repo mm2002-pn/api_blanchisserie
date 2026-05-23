@@ -1,3 +1,4 @@
+import path from 'node:path';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -78,6 +79,15 @@ export function createApp() {
 
   // ─────── Rate limit global ───────
   app.use(globalLimiter);
+
+  // ─────── Fichiers uploadés (servis en statique, sans rate limit pour les blobs) ───────
+  app.use(
+    '/uploads',
+    express.static(path.resolve(env.UPLOAD_DIR), {
+      maxAge: env.NODE_ENV === 'production' ? '7d' : 0,
+      fallthrough: false,
+    }),
+  );
 
   // ─────── Routes API ───────
   app.use('/api/v1', apiRouter);
