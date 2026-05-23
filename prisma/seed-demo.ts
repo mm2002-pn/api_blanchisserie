@@ -96,6 +96,12 @@ async function cleanDemo() {
     where: { matricule: { in: VEHICLES.map((v) => v.matricule) } },
   });
 
+  // Users hotel (rattachés aux clients démo) — à supprimer AVANT les clients
+  // pour ne pas être bloqué par la FK clientId.
+  await prisma.user.deleteMany({
+    where: { email: { in: HOTELS.map((h) => h.email) } },
+  });
+
   // Clients démo
   await prisma.client.deleteMany({
     where: { email: { in: HOTELS.map((h) => h.email) } },
@@ -143,7 +149,11 @@ async function main() {
   const operators = await prisma.user.findMany({ where: { role: 'operator' } });
   const supervisor = staffById.supervisor;
 
-  /* ── CLIENTS ───────────────────────────────────────────── */
+  /* ── CLIENTS + HOTEL USERS ─────────────────────────────── */
+  // Pour chaque hôtel/resto, on crée :
+  //  - un Client (entité métier)
+  //  - un User role='hotel' lié, avec l'email du client comme login
+  //  → permet le login mobile en tant qu'hôtel.
   const clients = [];
   for (const h of HOTELS) {
     const c = await prisma.client.create({
@@ -158,9 +168,19 @@ async function main() {
         notes: 'demo',
       },
     });
+    await prisma.user.create({
+      data: {
+        email: h.email,
+        passwordHash,
+        firstName: h.name,
+        lastName: 'Contact',
+        role: 'hotel',
+        clientId: c.id,
+      },
+    });
     clients.push(c);
   }
-  console.log(`  ✓ ${clients.length} clients`);
+  console.log(`  ✓ ${clients.length} clients + hotel users (mdp: Password!1)`);
 
   /* ── VEHICLES ──────────────────────────────────────────── */
   for (const v of VEHICLES) {
