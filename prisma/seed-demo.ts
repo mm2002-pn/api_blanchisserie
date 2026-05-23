@@ -19,11 +19,15 @@ const prisma = new PrismaClient();
 
 /* ════════════ FIXTURES ════════════ */
 
+// NB. Les emails Almadies/Radisson/Pullman matchent volontairement les
+// raccourcis "Comptes de test" affichés sur l'écran de login mobile
+// (app/(auth)/sign-in.tsx) — pas besoin de rebuilder l'APK quand on
+// veut tester ces 3 hôtels.
 const HOTELS = [
   { name: 'Hôtel Teranga', type: 'hotel_4_etoiles', address: 'Place de l\'Indépendance', city: 'Dakar', email: 'reception@teranga.sn', phone: '+221331234001' },
-  { name: 'Radisson Blu Dakar', type: 'hotel_5_etoiles', address: 'Corniche Ouest', city: 'Dakar', email: 'ops@radissonblu.sn', phone: '+221331234002' },
-  { name: 'Hôtel des Almadies', type: 'hotel_3_etoiles', address: 'Route des Almadies', city: 'Dakar', email: 'contact@almadies.sn', phone: '+221331234003' },
-  { name: 'Pullman Dakar', type: 'hotel_5_etoiles', address: 'Avenue Senghor', city: 'Dakar', email: 'linge@pullman.sn', phone: '+221331234004' },
+  { name: 'Radisson Blu Dakar', type: 'hotel_5_etoiles', address: 'Corniche Ouest', city: 'Dakar', email: 'radisson@blanchisserie.sn', phone: '+221331234002' },
+  { name: 'Hôtel des Almadies', type: 'hotel_3_etoiles', address: 'Route des Almadies', city: 'Dakar', email: 'hotel@blanchisserie.sn', phone: '+221331234003' },
+  { name: 'Pullman Dakar', type: 'hotel_5_etoiles', address: 'Avenue Senghor', city: 'Dakar', email: 'pullman@blanchisserie.sn', phone: '+221331234004' },
   { name: 'Restaurant Le Lagon', type: 'restaurant', address: 'Route de la Corniche', city: 'Dakar', email: 'admin@lelagon.sn', phone: '+221331234005' },
 ] as const;
 
