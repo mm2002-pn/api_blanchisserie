@@ -33,6 +33,15 @@ export function createApp() {
         if (env.CORS_ORIGINS.includes(origin) || env.CORS_ORIGINS.includes('*')) {
           return cb(null, true);
         }
+        // Hors production : autorise tout localhost/127.0.0.1 quel que soit le port
+        // (Vite change souvent de port quand plusieurs instances tournent en //
+        //  parallèle) — évite d'avoir à retoucher CORS_ORIGINS à chaque redémarrage.
+        if (
+          env.NODE_ENV !== 'production' &&
+          /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)
+        ) {
+          return cb(null, true);
+        }
         return cb(new Error(`CORS: origin '${origin}' not allowed`));
       },
       credentials: true,

@@ -1,7 +1,7 @@
 /**
  * Seed démo — peuple la base avec des données réalistes pour démo / dev :
  *  - 5 clients (hôtels + 1 restaurant) avec emails/téléphones
- *  - 5 users staff (driver/operator/supervisor/manager) — mdp `Password!1`
+ *  - 5 users staff (driver/operator/supervisor/manager) — mdp `123`
  *  - 4 véhicules
  *  - 1 tarif par défaut avec TariffItems pour tous les types de linge
  *  - 25 commandes réparties sur les 7 étapes du workflow
@@ -129,7 +129,7 @@ async function main() {
   console.log('  ✓ previous demo data cleared');
 
   /* ── STAFF ─────────────────────────────────────────────── */
-  const passwordHash = await argon2.hash('Password!1', { type: argon2.argon2id });
+  const passwordHash = await argon2.hash('123', { type: argon2.argon2id });
   const staffById: Record<string, { id: string; role: string }> = {};
   for (const u of STAFF) {
     const created = await prisma.user.create({
@@ -143,7 +143,7 @@ async function main() {
     });
     staffById[u.role] = { id: created.id, role: created.role };
   }
-  console.log(`  ✓ ${STAFF.length} staff users (mdp: Password!1)`);
+  console.log(`  ✓ ${STAFF.length} staff users (mdp: 123)`);
 
   const drivers = await prisma.user.findMany({ where: { role: 'driver' } });
   const operators = await prisma.user.findMany({ where: { role: 'operator' } });
@@ -180,7 +180,7 @@ async function main() {
     });
     clients.push(c);
   }
-  console.log(`  ✓ ${clients.length} clients + hotel users (mdp: Password!1)`);
+  console.log(`  ✓ ${clients.length} clients + hotel users (mdp: 123)`);
 
   /* ── VEHICLES ──────────────────────────────────────────── */
   for (const v of VEHICLES) {
@@ -354,7 +354,7 @@ async function main() {
 
   console.log('🎉 Demo seed done');
   console.log('   → POST /api/v1/batches/suggest to exercise Groq');
-  console.log('   → Logins: driver@/op1@/sup@/mgr@blanchisserie.sn (Password!1)');
+  console.log('   → Logins: driver@/op1@/sup@/mgr@blanchisserie.sn (123)');
 }
 
 main()
