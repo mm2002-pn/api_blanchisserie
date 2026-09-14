@@ -1,7 +1,7 @@
 /**
  * Seed minimal pour démarrer en dev.
  * Crée :
- *  - 1 admin (email: admin@blanchisserie.sn / password: Password!1)
+ *  - 1 admin (email: admin@blanchisserie.sn / password: 123)
  *  - 4 machines (2 PRIMUS + 2 GIRBAU)
  *  - 22 programmes de lavage du CDC
  *  - quelques types de linge LP/LF/NAE
@@ -89,7 +89,7 @@ async function main() {
   console.log('🌱 Seeding database…');
 
   // Admin
-  const passwordHash = await argon2.hash('Password!1', { type: argon2.argon2id });
+  const passwordHash = await argon2.hash('123', { type: argon2.argon2id });
   await prisma.user.upsert({
     where: { email: 'admin@blanchisserie.sn' },
     update: {},
@@ -101,7 +101,7 @@ async function main() {
       role: 'admin',
     },
   });
-  console.log('  ✓ admin user (admin@blanchisserie.sn / Password!1)');
+  console.log('  ✓ admin user (admin@blanchisserie.sn / 123)');
 
   // Programmes
   for (const [code, name, t, dur, spin, water, det, suit] of PROGRAMS) {
