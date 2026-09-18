@@ -65,8 +65,12 @@ L'API écoute sur **http://localhost:4000** par défaut. Endpoint racine : `GET 
 
 ```
 email    : admin@blanchisserie.sn
-password : Password!1
+password : 123
 ```
+
+## 🌍 Déploiement
+
+Production hébergée sur **Railway** (service `api_blanchisserie`, connecté à ce repo — auto-deploy à chaque push sur `main`). Base Postgres et variables d'environnement gérées dans le dashboard Railway du projet.
 
 ## 📁 Architecture
 
