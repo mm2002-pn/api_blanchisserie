@@ -36,7 +36,7 @@ ordersRouter.get('/', listOrdersCtrl);
 ordersRouter.get('/:id', getOrderCtrl);
 ordersRouter.post(
   '/',
-  requireRoles('hotel', 'admin', 'manager', 'operator'),
+  requireRoles('hotel', 'admin', 'manager', 'operator', 'driver'),
   validate({ body: createOrderSchema }),
   createOrderCtrl,
 );

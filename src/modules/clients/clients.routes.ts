@@ -15,7 +15,7 @@ clientsRouter.use(authMiddleware);
 
 clientsRouter.get(
   '/',
-  requireRoles('admin', 'manager', 'supervisor', 'operator'),
+  requireRoles('admin', 'manager', 'supervisor', 'operator', 'driver'),
   validate({ query: listClientsSchema }),
   asyncHandler(async (req, res) => {
     const result = await svc.listClients({

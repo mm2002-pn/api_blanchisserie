@@ -13,6 +13,9 @@ export const createOrderSchema = z.object({
   /** Localisation cible où le chauffeur doit venir collecter. */
   pickupGeoLat: z.number().min(-90).max(90).optional(),
   pickupGeoLng: z.number().min(-180).max(180).optional(),
+  /** Requis quand le créateur n'est pas un compte hôtel (admin/manager/operator/driver) —
+   *  ignoré côté serveur si le créateur EST un hôtel (scope forcé sur son propre client). */
+  clientId: z.string().optional(),
 });
 
 /** Édition d'une commande par le client AVANT collecte uniquement.
